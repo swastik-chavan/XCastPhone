@@ -51,11 +51,17 @@ XCastPhone approaches the problem from a developer-first perspective:
 
 ## 4. Demo
 
-The following recording demonstrates the complete end-to-end workflow: starting XCastPhone, pairing via Android Wireless Debugging, automatic service discovery, and live low-latency screen casting into the floating mirror window.
+The following recording demonstrates the complete end-to-end workflow: starting XCastPhone from the terminal, scanning the dedicated square QR code using Android Wireless Debugging, automatic service discovery, and live low-latency screen casting into the floating mirror window.
 
-https://github.com/swastik-chavan/XCastPhone/raw/main/assets/Video-Xcast.mp4
+<div align="center">
 
-> **Direct File Link**: [`assets/Video-Xcast.mp4`](assets/Video-Xcast.mp4) (Local repository video)
+![XCastPhone Live Mirror Demo](assets/demo.gif)
+
+*Live wireless screen casting from terminal into floating portrait mirror window.*
+
+<sub>Full-resolution recording available at [`assets/Video-Xcast.mp4`](assets/Video-Xcast.mp4)</sub>
+
+</div>
 
 ---
 
@@ -421,6 +427,7 @@ XCastPhone/
 ├── go.sum                      # Dependency checksums
 ├── assets/
 │   ├── README.md
+│   ├── demo.gif                # High-definition inline animated demo
 │   └── Video-Xcast.mp4         # Official project demo recording
 ├── cmd/
 │   └── xcast/
