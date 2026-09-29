@@ -35,29 +35,84 @@ Write-Host "[+] Architecture: $Arch" -ForegroundColor Gray
 
 # 3. Install XCastPhone Binary
 $TargetBinary = Join-Path $InstallDir "xcast.exe"
+$Installed = $false
 
-# If running locally inside repository
-$LocalBuild = Join-Path $PSScriptRoot "..\xcast.exe"
-$LocalCmdDir = Join-Path $PSScriptRoot "..\cmd\xcast"
+# Check local repository or current working directory if available
+$CandidateDirs = @()
+if ($PSScriptRoot) {
+    $CandidateDirs += $PSScriptRoot
+    $CandidateDirs += (Join-Path $PSScriptRoot "..")
+}
+if ($PWD) {
+    $CandidateDirs += $PWD.Path
+}
 
-if (Test-Path $LocalBuild) {
-    Write-Host "[+] Installing local build of xcast.exe..." -ForegroundColor Green
-    Copy-Item $LocalBuild -Destination $TargetBinary -Force
-} elseif (Test-Path $LocalCmdDir) {
-    if (Get-Command go -ErrorAction SilentlyContinue) {
-        Write-Host "[+] Building xcast from local source..." -ForegroundColor Green
-        Push-Location (Join-Path $PSScriptRoot "..")
-        go build -o $TargetBinary ./cmd/xcast
-        Pop-Location
+foreach ($dir in $CandidateDirs) {
+    if (-not $dir) { continue }
+    $localExe = Join-Path $dir "xcast.exe"
+    $localCmd = Join-Path $dir "cmd\xcast"
+    if (Test-Path $localExe) {
+        Write-Host "[+] Installing from local binary ($localExe)..." -ForegroundColor Green
+        Copy-Item $localExe -Destination $TargetBinary -Force
+        $Installed = $true
+        break
+    } elseif (Test-Path $localCmd) {
+        if (Get-Command go -ErrorAction SilentlyContinue) {
+            Write-Host "[+] Building xcast from local source ($dir)..." -ForegroundColor Green
+            Push-Location $dir
+            try {
+                go build -o $TargetBinary ./cmd/xcast
+                $Installed = $true
+            } finally {
+                Pop-Location
+            }
+            if ($Installed) { break }
+        }
     }
-} else {
-    # Download from GitHub Releases
+}
+
+# Remote installation if not installed locally
+if (-not $Installed) {
     $DownloadUrl = "https://github.com/$RepoOwner/$RepoName/releases/$Version/download/xcast-windows-$Arch.exe"
-    Write-Host "[+] Downloading XCastPhone from $DownloadUrl..." -ForegroundColor Green
+    Write-Host "[+] Fetching XCastPhone..." -ForegroundColor Green
+
+    $downloadSuccess = $false
     try {
-        curl.exe -fL -o $TargetBinary $DownloadUrl
-    } catch {
-        Write-Warning "Remote download failed. You can build locally from source via 'go build -o xcast.exe ./cmd/xcast'."
+        curl.exe -fL -o $TargetBinary $DownloadUrl 2>$null
+        if ($LASTEXITCODE -eq 0 -and (Test-Path $TargetBinary)) {
+            $downloadSuccess = $true
+            $Installed = $true
+        }
+    } catch {}
+
+    if (-not $downloadSuccess) {
+        # Fallback: if Go is installed, download repository source archive and build
+        if (Get-Command go -ErrorAction SilentlyContinue) {
+            Write-Host "[+] Building latest xcast from GitHub source..." -ForegroundColor Green
+            $tempZip = Join-Path $InstallDir "source.zip"
+            $tempExtract = Join-Path $InstallDir "source_build"
+            $zipUrl = "https://github.com/$RepoOwner/$RepoName/archive/refs/heads/main.zip"
+            try {
+                curl.exe -fL -o $tempZip $zipUrl
+                if (-not (Test-Path $tempExtract)) { New-Item -ItemType Directory -Path $tempExtract -Force | Out-Null }
+                tar.exe -xf $tempZip -C $tempExtract
+                $sourceRoot = Join-Path $tempExtract "$RepoName-main"
+                if (-not (Test-Path $sourceRoot)) {
+                    $sourceRoot = (Get-ChildItem $tempExtract | Where-Object { $_.PSIsContainer } | Select-Object -First 1).FullName
+                }
+                Push-Location $sourceRoot
+                go build -o $TargetBinary ./cmd/xcast
+                Pop-Location
+                $Installed = $true
+            } catch {
+                Write-Warning "Failed to build from source archive: $_"
+            } finally {
+                Remove-Item $tempZip -Force -ErrorAction SilentlyContinue
+                Remove-Item $tempExtract -Recurse -Force -ErrorAction SilentlyContinue
+            }
+        } else {
+            Write-Warning "Could not download prebuilt release. Install Go to build from source, or check https://github.com/$RepoOwner/$RepoName."
+        }
     }
 }
 
@@ -103,7 +158,6 @@ if (-not $AdbFound) {
     try {
         curl.exe -L -o $AdbZip $AdbUrl
         tar.exe -xf $AdbZip -C $InstallDir
-        # Move binaries directly into $InstallDir
         $ExtractedDir = Join-Path $InstallDir "platform-tools"
         if (Test-Path $ExtractedDir) {
             Get-ChildItem $ExtractedDir | Move-Item -Destination $InstallDir -Force
