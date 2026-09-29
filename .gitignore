@@ -1,0 +1,29 @@
+# Binaries
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+/xcast
+/xcast.exe
+
+# Build artifacts and temp
+bin/
+dist/
+tmp/
+*.7z
+*.zip
+
+# Go workspace and test binaries
+*.test
+*.out
+go.work
+go.work.sum
+
+# IDE and OS
+.idea/
+.vscode/
+*.swp
+*~
+.DS_Store
+Thumbs.db
