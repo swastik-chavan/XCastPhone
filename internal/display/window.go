@@ -8,6 +8,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"sync"
 )
 
 // RendererType specifies which multimedia backend is active.
@@ -183,3 +184,102 @@ func (w *WindowSession) Close() error {
 	}
 	return nil
 }
+
+// QRWindowSession represents the native window displaying the pairing QR code.
+type QRWindowSession struct {
+	Cmd       *exec.Cmd
+	FilePath  string
+	ExitChan  chan error
+	closeOnce sync.Once
+}
+
+// Close gracefully terminates the QR window and removes the temporary QR image file.
+func (q *QRWindowSession) Close() error {
+	var err error
+	q.closeOnce.Do(func() {
+		if q.Cmd != nil && q.Cmd.Process != nil {
+			_ = q.Cmd.Process.Kill()
+		}
+		if q.FilePath != "" {
+			_ = os.Remove(q.FilePath)
+		}
+	})
+	return err
+}
+
+// LaunchQRWindow opens a native desktop window displaying the square QR code for wireless debugging.
+// It uses mpv if available, preserving 1:1 aspect ratio, integer scaling, and sharp rendering.
+// If mpv/ffplay is not available, it falls back to opening the image using the OS desktop viewer.
+func LaunchQRWindow(ctx context.Context, imgPath string, verbose bool) (*QRWindowSession, error) {
+	rendererPath, rType, err := FindRenderer()
+	if err == nil {
+		var args []string
+		if rType == RendererMPV {
+			args = []string{
+				"--title=XCastPhone - Wireless Pairing",
+				"--keepaspect=yes",
+				"--geometry=600x600",
+				"--autofit=600x600",
+				"--image-display-duration=inf",
+				"--loop-file=inf",
+				"--force-window=yes",
+				"--no-osc",
+				"--no-osd-bar",
+				"--scale=nearest",
+				"--background-color=#FFFFFF",
+				imgPath,
+			}
+		} else { // RendererFFplay
+			args = []string{
+				"-window_title", "XCastPhone - Wireless Pairing",
+				"-x", "600",
+				"-y", "600",
+				"-loop", "0",
+				imgPath,
+			}
+		}
+
+		cmd := exec.CommandContext(ctx, rendererPath, args...)
+		cmd.Stdout = io.Discard
+		cmd.Stderr = io.Discard
+
+		if err := cmd.Start(); err == nil {
+			session := &QRWindowSession{
+				Cmd:      cmd,
+				FilePath: imgPath,
+				ExitChan: make(chan error, 1),
+			}
+			go func() {
+				session.ExitChan <- cmd.Wait()
+			}()
+			return session, nil
+		}
+	}
+
+	// Desktop fallback per Part 4 if no renderer or launch failed
+	var fallbackCmd *exec.Cmd
+	switch runtime.GOOS {
+	case "windows":
+		fallbackCmd = exec.CommandContext(ctx, "rundll32.exe", "url.dll,FileProtocolHandler", imgPath)
+	case "darwin":
+		fallbackCmd = exec.CommandContext(ctx, "open", imgPath)
+	default:
+		fallbackCmd = exec.CommandContext(ctx, "xdg-open", imgPath)
+	}
+
+	if err := fallbackCmd.Start(); err != nil {
+		return nil, fmt.Errorf("failed to open QR code window: %w", err)
+	}
+
+	session := &QRWindowSession{
+		Cmd:      fallbackCmd,
+		FilePath: imgPath,
+		ExitChan: make(chan error, 1),
+	}
+	go func() {
+		session.ExitChan <- fallbackCmd.Wait()
+	}()
+
+	return session, nil
+}
+

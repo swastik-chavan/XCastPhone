@@ -71,9 +71,18 @@ func (c *Coordinator) Run(ctx context.Context) error {
 
 	if dev == nil {
 		// No active device found: initiate QR pairing flow
-		fmt.Println("XCastPhone")
+		fmt.Println("==========================================")
+		fmt.Println("       XCastPhone Wireless Pairing        ")
+		fmt.Println("==========================================")
 		fmt.Println()
-		fmt.Println("Waiting for Android device...")
+		fmt.Println("Scan this QR code using:")
+		fmt.Println()
+		fmt.Println("Android Settings")
+		fmt.Println("→ Developer options")
+		fmt.Println("→ Wireless debugging")
+		fmt.Println("→ Pair device with QR code")
+		fmt.Println()
+		fmt.Println("[QR WINDOW]")
 		fmt.Println()
 
 		pairSession, err := pairing.NewSession(c.config.PairTimeout)
@@ -81,20 +90,34 @@ func (c *Coordinator) Run(ctx context.Context) error {
 			return fmt.Errorf("failed to generate pairing session: %w", err)
 		}
 
-		qrString, err := pairSession.RenderTerminalQR()
+		// Generate exact square integer-scaled QR image
+		qrPath, err := pairSession.CreateTempQRImageFile(800)
 		if err != nil {
-			return fmt.Errorf("failed to render QR code: %w", err)
+			return fmt.Errorf("failed to generate QR code image: %w", err)
 		}
 
-		fmt.Print(qrString)
-		fmt.Println()
-		fmt.Println("Scan the QR code using Android Wireless Debugging.")
-		fmt.Println("(Settings > Developer options > Wireless debugging > Pair device with QR code)")
-		fmt.Println()
-		fmt.Println("Waiting for connection...")
+		// Launch native QR window
+		qrWin, err := display.LaunchQRWindow(sigCtx, qrPath, c.config.Verbose)
+		if err != nil {
+			_ = os.Remove(qrPath)
+			return fmt.Errorf("failed to launch QR window: %w", err)
+		}
+		defer qrWin.Close()
+
+		// If user closes the QR window manually, cancel pairing context
+		pairCtx, cancelPair := context.WithCancel(sigCtx)
+		defer cancelPair()
+
+		go func() {
+			select {
+			case <-qrWin.ExitChan:
+				cancelPair()
+			case <-pairCtx.Done():
+			}
+		}()
 
 		// Discover and pair
-		dev, err = discovery.DiscoverAndPair(sigCtx, client, pairSession, c.config.PairTimeout)
+		dev, err = discovery.DiscoverAndPair(pairCtx, client, pairSession, c.config.PairTimeout, c.config.Verbose)
 		if err != nil {
 			if errors.Is(err, context.Canceled) {
 				fmt.Println("\nPairing aborted by user.")
@@ -102,6 +125,9 @@ func (c *Coordinator) Run(ctx context.Context) error {
 			}
 			return fmt.Errorf("pairing failed: %w", err)
 		}
+
+		// Close QR window immediately after successful pairing & authorization
+		_ = qrWin.Close()
 	}
 
 	// 4. Authorized device confirmed
@@ -115,6 +141,7 @@ func (c *Coordinator) Run(ctx context.Context) error {
 	fmt.Printf("FPS:        %d\n", c.config.TargetFPS)
 	fmt.Println("Status:     Connected")
 	fmt.Println()
+	fmt.Println("[STREAM] Starting screen stream...")
 	fmt.Println("Casting... (Press Ctrl+C to terminate)")
 
 	// 5. Ensure video renderer is available

@@ -31,7 +31,8 @@ func main() {
 		fmt.Fprintf(os.Stderr, "\nQuick Start:\n")
 		fmt.Fprintf(os.Stderr, "  1. Run 'xcast'\n")
 		fmt.Fprintf(os.Stderr, "  2. On Android phone: Settings > Developer options > Wireless debugging > 'Pair device with QR code'\n")
-		fmt.Fprintf(os.Stderr, "  3. Scan the terminal QR code to begin live mirroring\n")
+		fmt.Fprintf(os.Stderr, "  3. Scan the QR code displayed in the window to begin live mirroring\n")
+		fmt.Fprintf(os.Stderr, "     (Do not use the standard camera app; use Wireless Debugging QR scanner)\n")
 	}
 
 	flag.Parse()
