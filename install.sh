@@ -3,16 +3,16 @@
 # XCastPhone Linux / macOS Shell Installer
 # ==============================================================================
 # Usage:
-#   curl -fsSL https://raw.githubusercontent.com/<OWNER>/xcastphone/main/install.sh | sh
+#   curl -fsSL https://raw.githubusercontent.com/swastik-chavan/XCastPhone/main/install.sh | sh
 # ==============================================================================
 
 set -e
 
 # ------------------------------------------------------------------------------
-# CONFIGURATION - Set your GitHub username or organization
+# Repository Configuration
 # ------------------------------------------------------------------------------
-REPO_OWNER="<OWNER>"
-REPO_NAME="xcastphone"
+REPO_OWNER="swastik-chavan"
+REPO_NAME="XCastPhone"
 VERSION="latest"
 
 INSTALL_DIR="$HOME/.xcast/bin"
@@ -52,7 +52,7 @@ else
     if curl -fsSL -o "$TARGET_BIN" "$DOWNLOAD_URL"; then
         chmod +x "$TARGET_BIN"
     else
-        echo "Remote download failed. If repository owner '<OWNER>' is not set, build locally via 'go build -o xcast ./cmd/xcast'." >&2
+        echo "Remote download failed. You can build locally from source via 'go build -o xcast ./cmd/xcast'." >&2
     fi
 fi
 

@@ -24,7 +24,7 @@ With XCastPhone, you run a single command in your terminal:
 xcast
 ```
 
-A temporary QR code appears in your terminal. You scan it using Android's native **Wireless Debugging** menu in Developer Options. Once authorized, a native, borderless floating portrait window opens displaying your Android phone's screen live at up to 60 FPS in crisp 1080p/2K resolution.
+A temporary QR code appears in your terminal. You scan it using Android's native **Wireless Debugging** menu in Developer Options. Once authorized, a native, borderless floating portrait window opens displaying your Android phone's screen live (targeting up to 60 FPS and 1080p/2K resolution depending on device and network capabilities).
 
 **No Android app or APK is ever installed on your phone.** The phone is purely the streaming source; your PC handles the pairing, discovery, H.264 decoding, and floating mirror display.
 
@@ -116,10 +116,8 @@ XCastPhone strips away everything except what matters: **high-quality, low-laten
 Run in PowerShell:
 
 ```powershell
-iwr -useb https://raw.githubusercontent.com/<OWNER>/xcastphone/main/install.ps1 | iex
+iwr -useb https://raw.githubusercontent.com/swastik-chavan/XCastPhone/main/install.ps1 | iex
 ```
-
-*Note: Replace `<OWNER>` with your GitHub organization or username.*
 
 The Windows installer:
 1. Detects your CPU architecture (x64 / ARM64).
@@ -132,7 +130,7 @@ The Windows installer:
 Run in terminal:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/<OWNER>/xcastphone/main/install.sh | sh
+curl -fsSL https://raw.githubusercontent.com/swastik-chavan/XCastPhone/main/install.sh | sh
 ```
 
 The installer detects your OS and architecture, installs `xcast` to `~/.xcast/bin`, and adds it to your shell configuration (`~/.bashrc` / `~/.zshrc`).
@@ -242,10 +240,10 @@ All temporary pairing keys, decoder processes, and background pipes are cleanly 
 
 ---
 
-## Performance Considerations
+## Performance Targets & Considerations
 
-- **Latency Targets**: When connected over 5 GHz Wi-Fi or USB, typical latency ranges between 35ms - 70ms. 2.4 GHz Wi-Fi may introduce jitter under interference.
-- **Hardware Acceleration**: XCastPhone utilizes Android's hardware `MediaCodec` video encoder on device and desktop GPU decoding via `mpv`/libplacebo.
+- **Latency Targets**: When connected over 5 GHz Wi-Fi or USB, typical latency ranges between 35ms - 70ms. 2.4 GHz Wi-Fi or congested networks may introduce jitter. Latency and FPS depend on the Android device's hardware encoder and host PC hardware decoding capabilities.
+- **Hardware Acceleration**: XCastPhone utilizes Android's hardware `MediaCodec` video encoder on device and desktop GPU decoding via `mpv`/libplacebo where available.
 - **Adaptive Sizing**: For high-density screens (e.g. 1440x3120+), XCastPhone automatically calculates proportional, even-dimension resolutions that prevent encoder strain while preserving exact aspect ratios.
 
 ---
@@ -273,7 +271,7 @@ If your device was previously paired or is connected via USB, running `xcast` by
 ## Repository Structure
 
 ```text
-xcastphone/
+XCastPhone/
 ├── cmd/
 │   └── xcast/
 │       └── main.go          # CLI entry point and argument parsing
@@ -321,8 +319,8 @@ xcastphone/
 ### Build Locally
 ```bash
 # Clone the repository
-git clone https://github.com/<OWNER>/xcastphone.git
-cd xcastphone
+git clone https://github.com/swastik-chavan/XCastPhone.git
+cd XCastPhone
 
 # Run all unit tests
 go test -v ./...

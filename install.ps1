@@ -2,16 +2,16 @@
 # XCastPhone Windows PowerShell Installer
 # ==============================================================================
 # Usage:
-#   iwr -useb https://raw.githubusercontent.com/<OWNER>/xcastphone/main/install.ps1 | iex
+#   iwr -useb https://raw.githubusercontent.com/swastik-chavan/XCastPhone/main/install.ps1 | iex
 # ==============================================================================
 
 $ErrorActionPreference = "Stop"
 
 # ------------------------------------------------------------------------------
-# CONFIGURATION - Set your GitHub username or organization
+# Repository Configuration
 # ------------------------------------------------------------------------------
-$RepoOwner = "<OWNER>"
-$RepoName  = "xcastphone"
+$RepoOwner = "swastik-chavan"
+$RepoName  = "XCastPhone"
 $Version   = "latest"
 
 $InstallDir = Join-Path $HOME ".xcast\bin"
@@ -55,7 +55,7 @@ if (Test-Path $LocalBuild) {
     try {
         curl.exe -fL -o $TargetBinary $DownloadUrl
     } catch {
-        Write-Warning "Remote download failed. If repository owner '<OWNER>' hasn't been set, build locally via 'go build -o xcast.exe ./cmd/xcast'."
+        Write-Warning "Remote download failed. You can build locally from source via 'go build -o xcast.exe ./cmd/xcast'."
     }
 }
 
