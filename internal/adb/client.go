@@ -78,27 +78,29 @@ func (c *Client) Shell(serial string, shellCmd string) (string, error) {
 
 // ExecOutStream runs an exec-out command and returns an io.ReadCloser streaming binary stdout.
 // This is critical for screenrecord streaming without line-ending transformations.
-func (c *Client) ExecOutStream(ctx context.Context, serial string, args ...string) (io.ReadCloser, *exec.Cmd, error) {
+// stderrBuf captures all stderr messages (e.g. adb device offline, encoder failure) for diagnostics.
+func (c *Client) ExecOutStream(ctx context.Context, serial string, args ...string) (io.ReadCloser, *exec.Cmd, *bytes.Buffer, error) {
 	cmdArgs := append([]string{"-s", serial, "exec-out"}, args...)
 	cmd := exec.CommandContext(ctx, c.adbPath, cmdArgs...)
 
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
-		return nil, nil, fmt.Errorf("failed to open stdout pipe: %w", err)
+		return nil, nil, nil, fmt.Errorf("failed to open stdout pipe: %w", err)
 	}
 
+	stderrBuf := &bytes.Buffer{}
 	if c.verbose {
-		cmd.Stderr = os.Stderr
+		cmd.Stderr = io.MultiWriter(stderrBuf, os.Stderr)
 	} else {
-		cmd.Stderr = io.Discard
+		cmd.Stderr = stderrBuf
 	}
 
 	if err := cmd.Start(); err != nil {
 		_ = stdout.Close()
-		return nil, nil, fmt.Errorf("failed to start adb exec-out: %w", err)
+		return nil, nil, stderrBuf, fmt.Errorf("failed to start adb exec-out: %w", err)
 	}
 
-	return stdout, cmd, nil
+	return stdout, cmd, stderrBuf, nil
 }
 
 // Pair pairs a device via wireless debugging pairing code.

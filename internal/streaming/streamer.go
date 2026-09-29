@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"os/exec"
+	"strings"
 	"time"
 
 	"xcastphone/internal/adb"
@@ -75,6 +76,20 @@ func (sm *StreamManager) Height() int {
 func (sm *StreamManager) StartStreaming(ctx context.Context, dstWriter io.WriteCloser) error {
 	defer dstWriter.Close()
 
+	// 1. Ensure device is online and awake
+	activeDev, err := sm.client.EnsureAuthorizedDevice(sm.config.Device)
+	if err != nil {
+		fmt.Printf("[STREAM][ERROR] Device offline or not ready: %v\n", err)
+		return fmt.Errorf("device verification failed: %w", err)
+	}
+	sm.config.Device = activeDev
+
+	state, pErr := sm.client.CheckScreenState(sm.config.Device.Serial)
+	if pErr == nil && !state.IsOn {
+		fmt.Printf("[STREAM][ERROR] Phone screen is currently off (%s)\n", state.Details)
+		return fmt.Errorf("%w (%s)", ErrScreenOff, state.Details)
+	}
+
 	// Screen-off background monitor
 	screenOffChan := make(chan error, 1)
 	monitorCtx, cancelMonitor := context.WithCancel(ctx)
@@ -93,13 +108,13 @@ func (sm *StreamManager) StartStreaming(ctx context.Context, dstWriter io.WriteC
 		default:
 		}
 
-		// Check screen power before starting each screenrecord cycle
+		// Re-verify screen power before starting each screenrecord cycle
 		state, pErr := sm.client.CheckScreenState(sm.config.Device.Serial)
 		if pErr == nil && !state.IsOn {
 			return fmt.Errorf("%w (%s)", ErrScreenOff, state.Details)
 		}
 
-		// Run adb exec-out screenrecord
+		// Configure adb exec-out screenrecord
 		sizeArg := fmt.Sprintf("%dx%d", sm.width, sm.height)
 		bitrateArg := fmt.Sprintf("%d", sm.config.Bitrate)
 
@@ -112,12 +127,14 @@ func (sm *StreamManager) StartStreaming(ctx context.Context, dstWriter io.WriteC
 			"-",
 		}
 
+		fmt.Println("[STREAM] Starting Android capture...")
 		streamCtx, cancelStream := context.WithCancel(ctx)
 
-		stdoutPipe, cmd, err := sm.client.ExecOutStream(streamCtx, sm.config.Device.Serial, args...)
+		stdoutPipe, cmd, stderrBuf, err := sm.client.ExecOutStream(streamCtx, sm.config.Device.Serial, args...)
 		if err != nil {
 			cancelStream()
 			consecutiveErrors++
+			fmt.Printf("[STREAM][ERROR] Failed to launch Android capture: %v\n", err)
 			if consecutiveErrors > 3 {
 				return fmt.Errorf("failed to start screen capture: %w", err)
 			}
@@ -126,6 +143,21 @@ func (sm *StreamManager) StartStreaming(ctx context.Context, dstWriter io.WriteC
 		}
 
 		consecutiveErrors = 0
+		if cmd.Process != nil {
+			fmt.Printf("[ANDROID] Capture process started (PID: %d)\n", cmd.Process.Pid)
+		}
+		fmt.Println("[STREAM] Transport connected.")
+		fmt.Println("[STREAM] Waiting for first frame...")
+
+		// Goroutine to log first frame arrival
+		go func() {
+			select {
+			case <-sm.inspector.FirstFrameChan():
+				fmt.Println("[STREAM] First frame received.")
+				fmt.Println("Casting... (Press Ctrl+C to terminate)")
+			case <-streamCtx.Done():
+			}
+		}()
 
 		// Forward stdout to dstWriter via inspector
 		pipeErrChan := make(chan error, 1)
@@ -155,6 +187,19 @@ func (sm *StreamManager) StartStreaming(ctx context.Context, dstWriter io.WriteC
 		}
 		_ = cmd.Wait()
 
+		exitCode := -1
+		if cmd.ProcessState != nil {
+			exitCode = cmd.ProcessState.ExitCode()
+		}
+		fmt.Printf("[ANDROID] Capture process exited (Exit code: %d)\n", exitCode)
+
+		if stderrBuf != nil && stderrBuf.Len() > 0 {
+			errStr := strings.TrimSpace(stderrBuf.String())
+			if errStr != "" && !strings.Contains(errStr, "killed") {
+				fmt.Printf("[ANDROID][ERROR] %s\n", errStr)
+			}
+		}
+
 		if errors.Is(loopErr, ErrScreenOff) {
 			return loopErr
 		}
@@ -177,6 +222,61 @@ func (sm *StreamManager) StartStreaming(ctx context.Context, dstWriter io.WriteC
 		time.Sleep(100 * time.Millisecond)
 	}
 }
+
+// DiagnosticCapture tests the capture and transport pipeline independently of any display window.
+// It runs screen capture for a test duration, verifying that bytes and frames arrive over the transport.
+func (sm *StreamManager) DiagnosticCapture(ctx context.Context, duration time.Duration) (decoder.StreamStats, error) {
+	activeDev, err := sm.client.EnsureAuthorizedDevice(sm.config.Device)
+	if err != nil {
+		return decoder.StreamStats{}, fmt.Errorf("device offline: %w", err)
+	}
+	sm.config.Device = activeDev
+
+	sizeArg := fmt.Sprintf("%dx%d", sm.width, sm.height)
+	bitrateArg := fmt.Sprintf("%d", sm.config.Bitrate)
+
+	diagCtx, cancelDiag := context.WithTimeout(ctx, duration)
+	defer cancelDiag()
+
+	args := []string{
+		"screenrecord",
+		"--output-format=h264",
+		"--size", sizeArg,
+		"--bit-rate", bitrateArg,
+		"--time-limit", fmt.Sprintf("%d", int(duration.Seconds())+2),
+		"-",
+	}
+
+	stdoutPipe, cmd, stderrBuf, err := sm.client.ExecOutStream(diagCtx, sm.config.Device.Serial, args...)
+	if err != nil {
+		return decoder.StreamStats{}, fmt.Errorf("failed to start diagnostic capture: %w", err)
+	}
+	defer func() {
+		_ = stdoutPipe.Close()
+		if cmd.Process != nil {
+			_ = cmd.Process.Kill()
+		}
+		_ = cmd.Wait()
+	}()
+
+	pipeErrChan := make(chan error, 1)
+	go func() {
+		pipeErrChan <- sm.inspector.PipeAndInspect(stdoutPipe, io.Discard)
+	}()
+
+	select {
+	case <-diagCtx.Done():
+		// Finished duration
+	case pErr := <-pipeErrChan:
+		if pErr != nil {
+			errStr := strings.TrimSpace(stderrBuf.String())
+			return sm.inspector.Stats(), fmt.Errorf("pipe error (%v), stderr: %s", pErr, errStr)
+		}
+	}
+
+	return sm.inspector.Stats(), nil
+}
+
 
 // monitorScreenState periodically checks dumpsys power and display state.
 func (sm *StreamManager) monitorScreenState(ctx context.Context, errChan chan<- error) {

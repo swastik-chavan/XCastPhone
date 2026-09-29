@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
 
@@ -20,6 +21,8 @@ import (
 // Config configures a casting session.
 type Config struct {
 	Verbose      bool
+	Debug        bool
+	TestStream   bool
 	Bitrate      int // in bps
 	MaxDimension int
 	TargetFPS    int
@@ -130,7 +133,13 @@ func (c *Coordinator) Run(ctx context.Context) error {
 		_ = qrWin.Close()
 	}
 
-	// 4. Authorized device confirmed
+	// 4. Authorized device confirmed & refreshed
+	activeDev, err := client.EnsureAuthorizedDevice(dev)
+	if err != nil {
+		fmt.Printf("[STREAM][ERROR] Device verification failed: %v\n", err)
+		return fmt.Errorf("device verification failed: %w", err)
+	}
+	dev = activeDev
 	_ = client.PopulateDeviceInfo(dev)
 
 	fmt.Println()
@@ -141,16 +150,8 @@ func (c *Coordinator) Run(ctx context.Context) error {
 	fmt.Printf("FPS:        %d\n", c.config.TargetFPS)
 	fmt.Println("Status:     Connected")
 	fmt.Println()
-	fmt.Println("[STREAM] Starting screen stream...")
-	fmt.Println("Casting... (Press Ctrl+C to terminate)")
 
-	// 5. Ensure video renderer is available
-	_, _, err = display.FindRenderer()
-	if err != nil {
-		return fmt.Errorf("video renderer missing: %w\nPlease install mpv or run install.ps1 / install.sh", err)
-	}
-
-	// 6. Setup streaming pipeline
+	// 5. Setup streaming pipeline
 	inspector := decoder.NewStreamInspector()
 	defer inspector.Close()
 
@@ -159,10 +160,42 @@ func (c *Coordinator) Run(ctx context.Context) error {
 		Bitrate:      c.config.Bitrate,
 		MaxDimension: c.config.MaxDimension,
 		TargetFPS:    c.config.TargetFPS,
-		Verbose:      c.config.Verbose,
+		Verbose:      c.config.Verbose || c.config.Debug,
 	}
 
 	streamMgr := streaming.NewStreamManager(client, streamCfg, inspector)
+
+	// If TestStream flag is set, run 3-second headless diagnostic stream
+	if c.config.TestStream {
+		fmt.Println("[DIAG] Running 3-second stream diagnostic test (headless)...")
+		stats, dErr := streamMgr.DiagnosticCapture(sigCtx, 3*time.Second)
+		if dErr != nil {
+			fmt.Printf("[DIAG][ERROR] %v\n", dErr)
+			return dErr
+		}
+		if stats.TotalBytes == 0 {
+			fmt.Println("[DIAG][ERROR] Case A: Android screen capture failed to produce bytes.")
+			return errors.New("stream produced 0 bytes")
+		} else if stats.TotalFrames == 0 {
+			fmt.Println("[DIAG][ERROR] Case B: Transport received data, but no H.264 video frames were decoded.")
+			return errors.New("no frames decoded")
+		}
+		fmt.Printf("[DIAG] Case C: SUCCESS! Received %d bytes, %d video frames (FPS: %.1f)\n",
+			stats.TotalBytes, stats.TotalFrames, stats.CurrentFPS)
+		fmt.Println("[DIAG] Video capture and transport pipeline is verified working.")
+		return nil
+	}
+
+	fmt.Println("[STREAM] Initializing...")
+
+	// 6. Ensure video renderer is available
+	_, _, err = display.FindRenderer()
+	if err != nil {
+		fmt.Printf("[WINDOW][ERROR] Video renderer missing: %v\n", err)
+		return fmt.Errorf("video renderer missing: %w\nPlease install mpv or run install.ps1 / install.sh", err)
+	}
+	fmt.Println("[STREAM] Renderer initialized.")
+	fmt.Println("[STREAM] Decoder initialized.")
 
 	// 7. Launch floating portrait mirror window
 	winCfg := display.WindowConfig{
@@ -171,14 +204,16 @@ func (c *Coordinator) Run(ctx context.Context) error {
 		Height:      streamMgr.Height(),
 		AspectRatio: dev.AspectRatio(),
 		TargetFPS:   c.config.TargetFPS,
-		Verbose:     c.config.Verbose,
+		Verbose:     c.config.Verbose || c.config.Debug,
 	}
 
 	winSession, winStdin, err := display.LaunchWindow(sigCtx, winCfg)
 	if err != nil {
+		fmt.Printf("[WINDOW][ERROR] Failed to launch mirror window: %v\n", err)
 		return fmt.Errorf("failed to launch mirror window: %w", err)
 	}
 	defer winSession.Close()
+	fmt.Println("[STREAM] Mirror window created.")
 
 	// 8. Run streaming loop
 	streamCtx, cancelStream := context.WithCancel(sigCtx)
@@ -189,20 +224,45 @@ func (c *Coordinator) Run(ctx context.Context) error {
 		streamErrChan <- streamMgr.StartStreaming(streamCtx, winStdin)
 	}()
 
-	// 9. Wait for termination triggers:
-	// - Ctrl+C / SIGTERM
-	// - Phone screen off / disconnect
-	// - Window closed by user
+	// In debug mode, print real-time stream stats periodically
+	if c.config.Debug || c.config.Verbose {
+		go func() {
+			ticker := time.NewTicker(3 * time.Second)
+			defer ticker.Stop()
+			for {
+				select {
+				case <-streamCtx.Done():
+					return
+				case <-ticker.C:
+					stats := inspector.Stats()
+					if stats.TotalBytes > 0 {
+						fmt.Printf("[STREAM] Bytes received: %d, Frames: %d (%.1f FPS, %.2f Mbps)\n",
+							stats.TotalBytes, stats.TotalFrames, stats.CurrentFPS, stats.CurrentBps/1e6)
+					}
+				}
+			}
+		}()
+	}
+
+	// 9. Wait for termination triggers
 	var terminationReason string
 
 	select {
 	case <-sigCtx.Done():
-		terminationReason = "user requested termination"
+		terminationReason = "user requested termination (Ctrl+C)"
 	case wErr := <-winSession.ExitChan:
+		if winSession.Stderr != nil && winSession.Stderr.Len() > 0 {
+			errText := strings.TrimSpace(winSession.Stderr.String())
+			if errText != "" && !strings.Contains(errText, "Exiting...") {
+				fmt.Printf("[WINDOW][ERROR] %s\n", errText)
+			}
+		}
 		if wErr != nil {
-			terminationReason = "mirror window closed"
+			fmt.Printf("[PROCESS] Mirror window exited: %v\n", wErr)
+			terminationReason = fmt.Sprintf("mirror window closed (%v)", wErr)
 		} else {
-			terminationReason = "mirror window closed"
+			fmt.Println("[PROCESS] Mirror window closed by user")
+			terminationReason = "mirror window closed by user"
 		}
 	case sErr := <-streamErrChan:
 		if errors.Is(sErr, streaming.ErrScreenOff) {
@@ -210,6 +270,7 @@ func (c *Coordinator) Run(ctx context.Context) error {
 		} else if errors.Is(sErr, streaming.ErrDeviceDisconnected) {
 			terminationReason = "android device disconnected"
 		} else if sErr != nil && !errors.Is(sErr, streaming.ErrSessionClosed) {
+			fmt.Printf("[STREAM][ERROR] %v\n", sErr)
 			terminationReason = fmt.Sprintf("stream error: %v", sErr)
 		} else {
 			terminationReason = "session ended"
@@ -225,3 +286,4 @@ func (c *Coordinator) Run(ctx context.Context) error {
 
 	return nil
 }
+

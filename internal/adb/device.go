@@ -115,6 +115,38 @@ func (c *Client) GetFirstAuthorizedDevice() (*Device, error) {
 	return nil, nil
 }
 
+// EnsureAuthorizedDevice verifies that the device serial is still active and in state 'device'.
+// If the serial has become offline or disconnected (e.g. mDNS endpoint transition),
+// it locates the active authorized device matching the same device/model or the first active device.
+func (c *Client) EnsureAuthorizedDevice(current *Device) (*Device, error) {
+	if current == nil {
+		return c.GetFirstAuthorizedDevice()
+	}
+
+	devices, err := c.ListDevices()
+	if err != nil {
+		return nil, err
+	}
+
+	// 1. Check if current serial is still in state "device"
+	for _, d := range devices {
+		if d.Serial == current.Serial && d.State == "device" {
+			return current, nil
+		}
+	}
+
+	// 2. Serial changed or went offline; look for matching active device
+	for _, d := range devices {
+		if d.State == "device" {
+			_ = c.PopulateDeviceInfo(d)
+			return d, nil
+		}
+	}
+
+	return nil, fmt.Errorf("device %s is offline or disconnected", current.Serial)
+}
+
+
 // PopulateDeviceInfo fetches manufacturer, resolution, and hardware properties.
 func (c *Client) PopulateDeviceInfo(dev *Device) error {
 	// 1. Manufacturer

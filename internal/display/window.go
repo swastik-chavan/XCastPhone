@@ -1,6 +1,7 @@
 package display
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"io"
@@ -34,6 +35,7 @@ type WindowSession struct {
 	Renderer RendererType
 	Cmd      *exec.Cmd
 	Stdin    io.WriteCloser
+	Stderr   *bytes.Buffer
 	ExitChan chan error
 }
 
@@ -108,31 +110,29 @@ func LaunchWindow(ctx context.Context, cfg WindowConfig) (*WindowSession, io.Wri
 	if rType == RendererMPV {
 		args = []string{
 			fmt.Sprintf("--title=%s", cfg.Title),
-			"--no-border",         // Borderless floating window per requirement
-			"--keepaspect=yes",    // Strictly preserve phone aspect ratio
+			"--keepaspect=yes", // Strictly preserve phone aspect ratio
 			fmt.Sprintf("--autofit=%dx%d", initialWidth, initialHeight),
 			"--profile=low-latency",
 			"--untimed",
 			"--video-sync=desync",
 			"--cache=no",
-			"--demuxer-lavf-probesize=32",
-			"--demuxer-lavf-analyzeduration=0",
+			"--demuxer-lavf-format=h264",
+			"--correct-pts=no",
+			fmt.Sprintf("--container-fps-override=%d", cfg.TargetFPS),
 			"--no-osc",     // Clean screen without on-screen controller
 			"--no-osd-bar", // No progress bar
-			"--idle=no",
+			"--idle=yes",   // Stay open and wait for incoming frames
+			"--force-window=yes",
 			"--window-scale=1.0",
+			"-", // read h264 bitstream from stdin
 		}
-		if cfg.TargetFPS > 0 {
-			args = append(args, fmt.Sprintf("--fps=%d", cfg.TargetFPS))
-		}
-		args = append(args, "-") // read h264 bitstream from stdin
 	} else {
 		// FFplay fallback
 		args = []string{
 			"-window_title", cfg.Title,
-			"-noborder",
 			"-probesize", "32",
 			"-sync", "video",
+			"-f", "h264",
 			"-framerate", fmt.Sprintf("%d", cfg.TargetFPS),
 			"-x", fmt.Sprintf("%d", initialWidth),
 			"-y", fmt.Sprintf("%d", initialHeight),
@@ -147,12 +147,13 @@ func LaunchWindow(ctx context.Context, cfg WindowConfig) (*WindowSession, io.Wri
 		return nil, nil, fmt.Errorf("failed to open stdin pipe for renderer: %w", err)
 	}
 
+	stderrBuf := &bytes.Buffer{}
 	if cfg.Verbose {
 		cmd.Stdout = os.Stdout
-		cmd.Stderr = os.Stderr
+		cmd.Stderr = io.MultiWriter(stderrBuf, os.Stderr)
 	} else {
 		cmd.Stdout = io.Discard
-		cmd.Stderr = io.Discard
+		cmd.Stderr = stderrBuf
 	}
 
 	if err := cmd.Start(); err != nil {
@@ -164,6 +165,7 @@ func LaunchWindow(ctx context.Context, cfg WindowConfig) (*WindowSession, io.Wri
 		Renderer: rType,
 		Cmd:      cmd,
 		Stdin:    stdin,
+		Stderr:   stderrBuf,
 		ExitChan: make(chan error, 1),
 	}
 

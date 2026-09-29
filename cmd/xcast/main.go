@@ -17,6 +17,8 @@ func main() {
 		showVersion = flag.Bool("version", false, "Print version information and exit")
 		showHelp    = flag.Bool("help", false, "Show help message")
 		verbose     = flag.Bool("verbose", false, "Enable verbose logging for debugging")
+		debug       = flag.Bool("debug", false, "Enable detailed debug diagnostics and stream stats")
+		testStream  = flag.Bool("test-stream", false, "Test Android capture and transport independently (headless)")
 		bitrateMbps = flag.Int("bitrate", 8, "Video streaming bitrate in Mbps (default 8)")
 		fps         = flag.Int("fps", 60, "Target frame rate (default 60)")
 		maxSize     = flag.Int("max-size", 2400, "Maximum screen dimension in pixels (default 2400)")
@@ -48,7 +50,9 @@ func main() {
 	}
 
 	cfg := session.Config{
-		Verbose:      *verbose,
+		Verbose:      *verbose || *debug,
+		Debug:        *debug,
+		TestStream:   *testStream,
 		Bitrate:      *bitrateMbps * 1000 * 1000,
 		MaxDimension: *maxSize,
 		TargetFPS:    *fps,

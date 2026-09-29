@@ -35,23 +35,26 @@ type StreamStats struct {
 
 // StreamInspector validates incoming H.264 bitstream and tracks real-time performance.
 type StreamInspector struct {
-	mu           sync.RWMutex
-	totalBytes   atomic.Uint64
-	totalFrames  atomic.Uint64
-	keyFrames    atomic.Uint64
-	fpsCounter   atomic.Uint64
-	byteCounter  atomic.Uint64
-	lastFrameAt  time.Time
-	firstFrameAt time.Time
-	currentBps   float64
-	currentFPS   float64
-	stopChan     chan struct{}
+	mu              sync.RWMutex
+	totalBytes      atomic.Uint64
+	totalFrames     atomic.Uint64
+	keyFrames       atomic.Uint64
+	fpsCounter      atomic.Uint64
+	byteCounter     atomic.Uint64
+	lastFrameAt     time.Time
+	firstFrameAt    time.Time
+	currentBps      float64
+	currentFPS      float64
+	stopChan        chan struct{}
+	firstFrameChan  chan struct{}
+	firstFrameOnce  sync.Once
 }
 
 // NewStreamInspector creates a stream inspector for validating H.264 frames and collecting stats.
 func NewStreamInspector() *StreamInspector {
 	si := &StreamInspector{
-		stopChan: make(chan struct{}),
+		stopChan:       make(chan struct{}),
+		firstFrameChan: make(chan struct{}),
 	}
 
 	// Metrics calculation loop (every 1 second)
@@ -84,6 +87,21 @@ func (si *StreamInspector) Close() {
 	case <-si.stopChan:
 	default:
 		close(si.stopChan)
+	}
+}
+
+// FirstFrameChan returns a channel that is closed when the first valid video frame/header arrives.
+func (si *StreamInspector) FirstFrameChan() <-chan struct{} {
+	return si.firstFrameChan
+}
+
+// FirstFrameReceived returns true if at least one video frame has been processed.
+func (si *StreamInspector) FirstFrameReceived() bool {
+	select {
+	case <-si.firstFrameChan:
+		return true
+	default:
+		return false
 	}
 }
 
@@ -133,6 +151,9 @@ func (si *StreamInspector) PipeAndInspect(src io.Reader, dst io.Writer) error {
 
 		if err != nil {
 			if errors.Is(err, io.EOF) {
+				if si.totalBytes.Load() == 0 {
+					return errors.New("stream closed without producing any video data (0 bytes received)")
+				}
 				return nil
 			}
 			return err
@@ -161,12 +182,17 @@ func (si *StreamInspector) detectNALUnits(data []byte) {
 				si.keyFrames.Add(1)
 				si.totalFrames.Add(1)
 				si.fpsCounter.Add(1)
+				si.firstFrameOnce.Do(func() { close(si.firstFrameChan) })
 			case NALTypeNonIDR:
 				si.totalFrames.Add(1)
 				si.fpsCounter.Add(1)
+				si.firstFrameOnce.Do(func() { close(si.firstFrameChan) })
+			case NALTypeSPS, NALTypePPS:
+				si.firstFrameOnce.Do(func() { close(si.firstFrameChan) })
 			}
 		}
 
 		idx = nalPos
 	}
 }
+
