@@ -502,3 +502,5 @@ Contributions to XCastPhone are welcome. Please adhere to these guidelines:
 
 This project is licensed under the [MIT License](LICENSE).
 Copyright (c) 2026 XCastPhone Contributors.
+
+Made with ❤️ by Swastik
